@@ -13,6 +13,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"unicode/utf8"
 )
 
 type imageType int
@@ -20,7 +21,7 @@ type imageType int
 const (
 	imageTypeButton imageType = iota
 	imageTypeButtonPressed
-	imageTypeTextBox
+	imageTypeTextLine
 	imageTypeVScollBarBack
 	imageTypeVScollBarFront
 	imageTypeCheckBox
@@ -31,7 +32,7 @@ const (
 var imageSrcRects = map[imageType]image.Rectangle{
 	imageTypeButton:          image.Rect(0, 0, 16, 16),
 	imageTypeButtonPressed:   image.Rect(16, 0, 32, 16),
-	imageTypeTextBox:         image.Rect(0, 16, 16, 32),
+	imageTypeTextLine:        image.Rect(0, 16, 16, 32),
 	imageTypeVScollBarBack:   image.Rect(16, 16, 24, 32),
 	imageTypeVScollBarFront:  image.Rect(24, 16, 32, 32),
 	imageTypeCheckBox:        image.Rect(0, 32, 16, 48),
@@ -136,7 +137,7 @@ type Button struct {
 	onPressed func(b *Button)
 }
 
-func (b *Button) Update(input Input) {
+func (b *Button) Update(input *Input) {
 	c := input.IsRectClicked(b.Rect, ebiten.MouseButtonLeft)
 	if c == InputRectValidClicked {
 		b.mouseDown = true
@@ -177,36 +178,24 @@ func (b *Button) SetOnPressed(f func(b *Button)) {
 }
 
 const (
-	textBoxPaddingLeft = 8
-	LineHeight         = 16
+	TextLinePaddingLeft = 8
+	LineHeight          = 16
 )
 
-type TextBox struct {
+type TextLine struct {
 	Rect     image.Rectangle
 	Text     string
 	ReadOnly bool
 
 	contentBuf *ebiten.Image
-	offsetX    int
-	offsetY    int
 	counter    int
 	focused    bool
 	ctrlVDown  bool
 
-	onEnterPressed func(t *TextBox)
+	onEnterPressed func(t *TextLine)
 }
 
-func (t *TextBox) AppendLine(line string) {
-	if t.Text == "" {
-		t.Text = line
-	} else {
-		t.Text += "\n" + line
-	}
-}
-
-func (t *TextBox) Update(input Input) {
-	t.offsetX = 0
-
+func (t *TextLine) Update(input *Input) {
 	t.counter++
 	c := input.IsRectClicked(t.Rect, ebiten.MouseButtonLeft)
 	if !t.ReadOnly && c == InputRectValidClicked {
@@ -219,7 +208,8 @@ func (t *TextBox) Update(input Input) {
 		t.Text += string(ebiten.InputChars())
 		if input.RepeatingKeyPressed(ebiten.KeyBackspace) {
 			if len(t.Text) >= 1 {
-				t.Text = t.Text[:len(t.Text)-1]
+				_, size := utf8.DecodeLastRuneInString(t.Text)
+				t.Text = t.Text[:len(t.Text)-size]
 			}
 		}
 
@@ -249,12 +239,12 @@ func (t *TextBox) Update(input Input) {
 	}
 }
 
-func (t *TextBox) viewSize() (int, int) {
-	return t.Rect.Dx() - textBoxPaddingLeft, t.Rect.Dy()
+func (t *TextLine) viewSize() (int, int) {
+	return t.Rect.Dx() - TextLinePaddingLeft, t.Rect.Dy()
 }
 
-func (t *TextBox) Draw(dst *ebiten.Image) {
-	drawNinePatches(dst, t.Rect, imageSrcRects[imageTypeTextBox])
+func (t *TextLine) Draw(dst *ebiten.Image) {
+	drawNinePatches(dst, t.Rect, imageSrcRects[imageTypeTextLine])
 
 	if t.contentBuf != nil {
 		vw, vh := t.viewSize()
@@ -270,7 +260,7 @@ func (t *TextBox) Draw(dst *ebiten.Image) {
 	}
 
 	t.contentBuf.Clear()
-	x := -t.offsetX + textBoxPaddingLeft
+	x := TextLinePaddingLeft
 	y := (t.Rect.Max.Y - t.Rect.Min.Y + LineHeight - uiFontMHeight) / 2
 	txt := t.Text
 	if t.focused && t.counter%60 < 30 {
@@ -282,6 +272,6 @@ func (t *TextBox) Draw(dst *ebiten.Image) {
 	dst.DrawImage(t.contentBuf, op)
 }
 
-func (t *TextBox) SetOnEnterPressed(f func(t *TextBox)) {
+func (t *TextLine) SetOnEnterPressed(f func(t *TextLine)) {
 	t.onEnterPressed = f
 }

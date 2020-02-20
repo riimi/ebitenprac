@@ -4,6 +4,7 @@ import (
 	"github.com/go-gota/gota/dataframe"
 	"github.com/go-gota/gota/series"
 	"golang.org/x/text/unicode/norm"
+	"sort"
 	"strings"
 )
 
@@ -20,22 +21,24 @@ func NewLocalAlignment(df dataframe.DataFrame) *LocalAlignment {
 	return &LocalAlignment{Ngwords: df}
 }
 func (la *LocalAlignment) Do(df dataframe.DataFrame) (dataframe.DataFrame, error) {
-	filtered := make([]string, df.Nrow())
-	predict := make([]int, df.Nrow())
-	df = df.Mutate(series.New(filtered, series.String, "filtered"))
-	df = df.Mutate(series.New(predict, series.Int, "predict"))
+	filtered := make([]string, 0, df.Nrow())
+	predict := make([]int, 0, df.Nrow())
 
 	filter := func(s series.Series) series.Series {
 		sentence := s.Elem(0).String()
 		replaced, changed := la.Replace(sentence)
 		//fmt.Println(replaced)
-		s.Set(2, series.Strings([]string{replaced}))
+		filtered = append(filtered, replaced)
 		if changed {
-			s.Set(3, series.Ints([]int{1}))
+			predict = append(predict, 1)
+		} else {
+			predict = append(predict, 0)
 		}
 		return s
 	}
 	df = df.Rapply(filter)
+	df = df.Mutate(series.New(filtered, series.String, "filtered"))
+	//df = df.Mutate(series.New(predict, series.Int, "predict"))
 
 	return df, nil
 }
@@ -48,25 +51,64 @@ func (la *LocalAlignment) Replace(sentence string) (string, bool) {
 	copy(result, origin)
 	for _, ng := range ngs {
 		w := []rune(norm.NFKD.String(ng["word"].(string)))
-		smithCh := SmithWaterman(origin, w, float32(ng["threshold"].(int))/100.0)
-		for r := range smithCh {
-			if r.LastNodes != nil {
-				continue
+		smithCh, endCh := SmithWaterman(origin, w, float32(ng["threshold"].(int))/100.0)
+
+	loop:
+		for {
+			select {
+			case r := <-smithCh:
+				changed = true
+				for i := r.StartPos; i <= r.EndPos; i++ {
+					result[i] = rune('*')
+				}
+			case <-endCh:
+				break loop
 			}
-			changed = true
-			for i := r.StartPos; i <= r.EndPos; i++ {
-				result[i] = rune('*')
-				//d := norm.NFC.NextBoundaryInString(string(origin[i:]), true)
-				//if d /= 3; d == 0 {
-				//	break
-				//}
-				//for j := i; j < i+d; j++ {
-				//	result[j] = rune('*')
-				//}
-				//i += d
+		}
+
+	}
+	return norm.NFC.String(string(result)), changed
+}
+
+type LocalAlignmentDebug struct {
+	Ngwords dataframe.DataFrame
+	End     []SmithWatermanEnd
+}
+
+func NewLocalAlignmentDebug(df dataframe.DataFrame) *LocalAlignmentDebug {
+	return &LocalAlignmentDebug{
+		Ngwords: df,
+		End:     make([]SmithWatermanEnd, 0),
+	}
+}
+func (la *LocalAlignmentDebug) Replace(sentence string) (string, bool) {
+	changed := false
+	origin := []rune(norm.NFKD.String(sentence))
+	ngs := la.Ngwords.Maps()
+	la.End = make([]SmithWatermanEnd, 0, len(ngs))
+
+	result := make([]rune, len(origin))
+	copy(result, origin)
+	for _, ng := range ngs {
+		w := []rune(norm.NFKD.String(ng["word"].(string)))
+		smithCh, endCh := SmithWaterman(origin, w, float32(ng["threshold"].(int))/100.0)
+
+	loop:
+		for {
+			select {
+			case r := <-smithCh:
+				changed = true
+				for i := r.StartPos; i <= r.EndPos; i++ {
+					result[i] = rune('*')
+				}
+			case e := <-endCh:
+				la.End = append(la.End, e)
+				break loop
 			}
 		}
 	}
+
+	sort.Sort(BySimilar(la.End))
 	return norm.NFC.String(string(result)), changed
 }
 

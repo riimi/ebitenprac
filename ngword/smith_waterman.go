@@ -1,5 +1,7 @@
 package ngword
 
+import "golang.org/x/text/unicode/norm"
+
 const (
 	SCORE_MATCH    = 5
 	SCORE_SIMILAR  = 4
@@ -16,8 +18,29 @@ type SmithWatermanResult struct {
 	MatchWord                           string
 	CompleteAgreement, AppliedAgreement int
 	SimilarScore                        float32
-	LastNodes                           []Node
 	StartPos, EndPos                    int
+}
+
+type SmithWatermanEnd struct {
+	MatchWord         string
+	LastNodes         []Node
+	CompleteAgreement int
+	MaxAgreement      int
+	ThreshAgreement   int
+}
+
+type BySimilar []SmithWatermanEnd
+
+func (b BySimilar) Len() int {
+	return len(b)
+}
+func (b BySimilar) Swap(i, j int) {
+	b[i], b[j] = b[j], b[i]
+}
+func (b BySimilar) Less(i, j int) bool {
+	f1 := float64(b[i].MaxAgreement) / float64(b[i].CompleteAgreement)
+	f2 := float64(b[j].MaxAgreement) / float64(b[j].CompleteAgreement)
+	return f1 > f2
 }
 
 type Node struct {
@@ -26,15 +49,31 @@ type Node struct {
 }
 
 var MatchTable = map[rune]int{
-	0x1100: 1, // ㄱ
-	0x1101: 1, // ㄲ
-	0x110f: 1, // ㅋ
-	0x1109: 4, // ㅅ 초성
-	0x110a: 4, // ㅆ 초성
-	0x1107: 5, // ㅂ 초성
-	0x1111: 5, // ㅍ 초성
-	0x11ac: 6, // ㅓ 중성
-	0x11ae: 6, // ㅕ 중성
+	0x1100: 1,   // ㄱ
+	0x1101: 1,   // ㄲ
+	0x110f: 1,   // ㅋ
+	0x1109: 4,   // ㅅ 초성
+	0x110a: 4,   // ㅆ 초성
+	0x1107: 5,   // ㅂ 초성
+	0x1108: 5,   // ㅃ 초성
+	0x1111: 5,   // ㅍ 초성
+	0x1103: 6,   // ㄷ 초성
+	0x1104: 6,   // ㄸ 초성
+	0x1110: 6,   // ㅌ 초성
+	0x110c: 7,   // ㅈ 초성
+	0x110d: 7,   // ㅉ 초성
+	0x110e: 7,   // ㅊ 초성
+	0x1161: 100, // ㅏ 중성
+	0x1163: 100, // ㅑ 중성
+	0x1165: 101, // ㅓ 중성
+	0x1167: 101, // ㅕ 중성
+	0x1169: 102, // ㅗ 중성
+	0x116d: 102, // ㅛ 중성
+	0x116e: 103, // ㅜ 중성
+	0x1172: 103, // ㅠ 중성
+	0x1171: 104, // ㅟ 중성
+	0x1174: 104, // ㅢ 중성
+	0x1175: 104, // ㅣ 중성
 }
 
 func Match(a, b rune) int {
@@ -121,8 +160,9 @@ func History(stMatrix [][]Node, lenWord, endPos int) int {
 //	}
 //}
 
-func SmithWaterman(sentence, word []rune, thresh float32) <-chan SmithWatermanResult {
+func SmithWaterman(sentence, word []rune, thresh float32) (<-chan SmithWatermanResult, <-chan SmithWatermanEnd) {
 	smithCh := make(chan SmithWatermanResult, 10)
+	endCh := make(chan SmithWatermanEnd)
 
 	go func() {
 		lenStc := len(sentence)
@@ -160,6 +200,13 @@ func SmithWaterman(sentence, word []rune, thresh float32) <-chan SmithWatermanRe
 
 		completeAgreement := lenWord * SCORE_MATCH
 		threshAgreement := float32(completeAgreement) * thresh
+		maxAgreement := -987654321
+		for i := len(stMatrix[lenWord]) - 1; i >= 0; i-- {
+			v := stMatrix[lenWord][i]
+			if v.Score > maxAgreement {
+				maxAgreement = v.Score
+			}
+		}
 		for i := len(stMatrix[lenWord]) - 1; i >= 0; i-- {
 			v := stMatrix[lenWord][i]
 			if float32(v.Score) > threshAgreement {
@@ -169,7 +216,6 @@ func SmithWaterman(sentence, word []rune, thresh float32) <-chan SmithWatermanRe
 					CompleteAgreement: completeAgreement,
 					AppliedAgreement:  v.Score,
 					SimilarScore:      float32(v.Score) / float32(completeAgreement),
-					LastNodes:         nil,
 					StartPos:          s,
 					EndPos:            i - 1,
 					//EndPos:            i,
@@ -185,12 +231,15 @@ func SmithWaterman(sentence, word []rune, thresh float32) <-chan SmithWatermanRe
 		//	}
 		//}
 		//_p.Put(stMatrix)
-		smithCh <- SmithWatermanResult{
-			MatchWord:         "",
+		endCh <- SmithWatermanEnd{
+			MatchWord:         norm.NFC.String(string(word)),
 			LastNodes:         stMatrix[lenWord],
 			CompleteAgreement: completeAgreement,
+			MaxAgreement:      maxAgreement,
+			ThreshAgreement:   int(float32(completeAgreement) * thresh),
 		}
 		close(smithCh)
+		close(endCh)
 	}()
-	return smithCh
+	return smithCh, endCh
 }
