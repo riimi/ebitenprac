@@ -1,7 +1,6 @@
 package turi
 
 import (
-	"github.com/atotto/clipboard"
 	"github.com/golang/freetype/truetype"
 	"github.com/hajimehoshi/ebiten"
 	"github.com/hajimehoshi/ebiten/ebitenutil"
@@ -13,7 +12,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"unicode/utf8"
 )
 
 type imageType int
@@ -183,14 +181,13 @@ const (
 )
 
 type TextLine struct {
+	TypeWriter
 	Rect     image.Rectangle
-	Text     string
 	ReadOnly bool
 
 	contentBuf *ebiten.Image
 	counter    int
 	focused    bool
-	ctrlVDown  bool
 
 	onEnterPressed func(t *TextLine)
 }
@@ -198,43 +195,18 @@ type TextLine struct {
 func (t *TextLine) Update(input *Input) {
 	t.counter++
 	c := input.IsRectClicked(t.Rect, ebiten.MouseButtonLeft)
-	if !t.ReadOnly && c == InputRectValidClicked {
+	if c == InputRectValidClicked {
 		t.focused = true
 	} else if c == InputRectInvalidClicked {
 		t.focused = false
 	}
 
-	if t.focused {
-		t.Text += string(ebiten.InputChars())
-		if input.RepeatingKeyPressed(ebiten.KeyBackspace) {
-			if len(t.Text) >= 1 {
-				_, size := utf8.DecodeLastRuneInString(t.Text)
-				t.Text = t.Text[:len(t.Text)-size]
-			}
-		}
-
+	if t.focused && !t.ReadOnly {
+		t.TypeWriter.Update(input)
 		if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
-			if t.onEnterPressed != nil && len(t.Text) >= 1 {
+			if t.onEnterPressed != nil && len(t.Text(false)) >= 1 {
 				t.onEnterPressed(t)
 			}
-		}
-
-		if input.PairKeyPressed(ebiten.KeyV, ebiten.KeyControl) {
-			if t.ctrlVDown == false {
-				clip, err := clipboard.ReadAll()
-				if err != nil {
-					log.Print(err)
-				} else {
-					t.Text += clip
-				}
-			}
-			t.ctrlVDown = true
-		} else {
-			t.ctrlVDown = false
-		}
-
-		if input.PairKeyPressed(ebiten.KeyA, ebiten.KeyControl) {
-			t.Text = ""
 		}
 	}
 }
@@ -262,10 +234,7 @@ func (t *TextLine) Draw(dst *ebiten.Image) {
 	t.contentBuf.Clear()
 	x := TextLinePaddingLeft
 	y := (t.Rect.Max.Y - t.Rect.Min.Y + LineHeight - uiFontMHeight) / 2
-	txt := t.Text
-	if t.focused && t.counter%60 < 30 {
-		txt += "_"
-	}
+	txt := t.Text(t.focused && t.counter%60 < 30)
 	text.Draw(t.contentBuf, txt, uiFont, x, y, color.Black)
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Translate(float64(t.Rect.Min.X), float64(t.Rect.Min.Y))

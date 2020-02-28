@@ -6,6 +6,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 	"sort"
 	"strings"
+	"sync"
 )
 
 type Filter interface {
@@ -18,25 +19,35 @@ type LocalAlignment struct {
 }
 
 func NewLocalAlignment(df dataframe.DataFrame) *LocalAlignment {
+	normalize := func(s series.Series) series.Series {
+		words := s.Records()
+		nor := make([]string, len(words))
+		for i, w := range words {
+			nor[i] = norm.NFKD.String(w)
+		}
+		return series.Strings(nor)
+	}
+	df = df.Select([]string{"word"}).Capply(normalize)
 	return &LocalAlignment{Ngwords: df}
 }
 func (la *LocalAlignment) Do(df dataframe.DataFrame) (dataframe.DataFrame, error) {
-	filtered := make([]string, 0, df.Nrow())
-	predict := make([]int, 0, df.Nrow())
+	filtered := make([]string, df.Nrow())
+	predict := make([]int, df.Nrow())
 
 	filter := func(s series.Series) series.Series {
-		sentence := s.Elem(0).String()
-		replaced, changed := la.Replace(sentence)
-		//fmt.Println(replaced)
-		filtered = append(filtered, replaced)
-		if changed {
-			predict = append(predict, 1)
-		} else {
-			predict = append(predict, 0)
+		stcs := s.Records()
+		for i, s := range stcs {
+			replaced, changed := la.Replace(s)
+			filtered[i] = replaced
+			if changed {
+				predict[i] = 1
+			} else {
+				predict[i] = 0
+			}
 		}
 		return s
 	}
-	df = df.Rapply(filter)
+	df.Capply(filter)
 	df = df.Mutate(series.New(filtered, series.String, "filtered"))
 	//df = df.Mutate(series.New(predict, series.Int, "predict"))
 
@@ -50,8 +61,9 @@ func (la *LocalAlignment) Replace(sentence string) (string, bool) {
 	result := make([]rune, len(origin))
 	copy(result, origin)
 	for _, ng := range ngs {
-		w := []rune(norm.NFKD.String(ng["word"].(string)))
-		smithCh, endCh := SmithWaterman(origin, w, float32(ng["threshold"].(int))/100.0)
+		//w := []rune(norm.NFKD.String(ng["word"].(string)))
+		w := []rune(ng["word"].(string))
+		smithCh, endCh := SmithWaterman(origin, w, -0.005*float32(len(w))+0.95)
 
 	loop:
 		for {
@@ -66,6 +78,81 @@ func (la *LocalAlignment) Replace(sentence string) (string, bool) {
 			}
 		}
 
+	}
+	return norm.NFC.String(string(result)), changed
+}
+
+type LocalAlignmentTrie struct {
+	trie Trie
+}
+
+func NewLocalAlignmentTrie(df dataframe.DataFrame) *LocalAlignmentTrie {
+	trie := NewTrie()
+	normalize := func(s series.Series) series.Series {
+		words := s.Records()
+		for _, w := range words {
+			trie.Append(norm.NFKD.String(w))
+		}
+		return s
+	}
+	df.Select([]string{"word"}).Capply(normalize)
+	return &LocalAlignmentTrie{trie: trie}
+}
+func (la *LocalAlignmentTrie) Do(df dataframe.DataFrame) (dataframe.DataFrame, error) {
+	filtered := make([]string, df.Nrow())
+	predict := make([]int, df.Nrow())
+
+	filter := func(s series.Series) series.Series {
+		token := make(chan struct{}, 8)
+		stcs := s.Records()
+		wg := &sync.WaitGroup{}
+		wg.Add(len(stcs))
+
+		for i, s := range stcs {
+			token <- struct{}{}
+			go func(idx int, str string) {
+				replaced, changed := la.Replace(str)
+				filtered[idx] = replaced
+				if changed {
+					predict[idx] = 1
+				} else {
+					predict[idx] = 0
+				}
+				<-token
+				wg.Done()
+			}(i, s)
+		}
+
+		wg.Wait()
+		//for i, s := range stcs {
+		//	replaced, changed := la.Replace(s)
+		//	filtered[i] = replaced
+		//	if changed {
+		//		predict[i] = 1
+		//	} else {
+		//		predict[i] = 0
+		//	}
+		//}
+		return s
+	}
+	df.Capply(filter)
+	df = df.Mutate(series.New(filtered, series.String, "filtered"))
+	//df = df.Mutate(series.New(predict, series.Int, "predict"))
+
+	return df, nil
+}
+func (la *LocalAlignmentTrie) Replace(sentence string) (string, bool) {
+	changed := false
+	origin := []rune(norm.NFKD.String(sentence))
+
+	result := make([]rune, len(origin))
+	copy(result, origin)
+	smithCh := SmithWatermanTrie(origin, la.trie, 0.9)
+	for r := range smithCh {
+		changed = true
+		for i := r.StartPos; i <= r.EndPos; i++ {
+			result[i] = rune('*')
+		}
 	}
 	return norm.NFC.String(string(result)), changed
 }

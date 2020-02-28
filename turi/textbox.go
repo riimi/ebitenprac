@@ -1,13 +1,11 @@
 package turi
 
 import (
-	"github.com/atotto/clipboard"
 	"github.com/hajimehoshi/ebiten"
 	"github.com/hajimehoshi/ebiten/inpututil"
 	"github.com/hajimehoshi/ebiten/text"
 	"image"
 	"image/color"
-	"log"
 	"strings"
 )
 
@@ -132,8 +130,8 @@ const (
 )
 
 type TextBox struct {
+	TypeWriter
 	Rect          image.Rectangle
-	Text          string
 	ReadOnly      bool
 	Mirror        *TextBox
 	HideScrollBar bool
@@ -143,16 +141,7 @@ type TextBox struct {
 	offsetX    int
 	offsetY    int
 
-	focused   bool
-	ctrlVDown bool
-}
-
-func (t *TextBox) AppendLine(line string) {
-	if t.Text == "" {
-		t.Text = line
-	} else {
-		t.Text += "\n" + line
-	}
+	focused bool
 }
 
 func (t *TextBox) Update(input *Input) {
@@ -181,28 +170,12 @@ func (t *TextBox) Update(input *Input) {
 	}
 
 	if t.focused {
-		if input.PairKeyPressed(ebiten.KeyV, ebiten.KeyControl) {
-			if t.ctrlVDown == false {
-				clip, err := clipboard.ReadAll()
-				if err != nil {
-					log.Print(err)
-				} else {
-					t.Text += clip
-				}
-			}
-			t.ctrlVDown = true
-		} else {
-			t.ctrlVDown = false
-		}
-
-		if input.PairKeyPressed(ebiten.KeyA, ebiten.KeyControl) {
-			t.Text = ""
-		}
+		t.TypeWriter.Update(input)
 	}
 }
 
 func (t *TextBox) contentSize() (int, int) {
-	h := len(strings.Split(t.Text, "\n")) * lineHeight
+	h := len(strings.Split(t.Text(false), "\n")) * lineHeight
 	return t.Rect.Dx(), h
 }
 
@@ -234,7 +207,7 @@ func (t *TextBox) Draw(dst *ebiten.Image) {
 	}
 
 	t.contentBuf.Clear()
-	for i, line := range strings.Split(t.Text, "\n") {
+	for i, line := range strings.Split(t.Text(false), "\n") {
 		x := -t.offsetX + textBoxPaddingLeft
 		y := -t.offsetY + i*lineHeight + lineHeight - (lineHeight-uiFontMHeight)/2
 		if y < -lineHeight {

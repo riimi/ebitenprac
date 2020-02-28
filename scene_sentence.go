@@ -23,7 +23,6 @@ type UI struct {
 	button1   *turi.Button
 	TextLine1 *turi.TextLine
 	TextLine2 *turi.TextLine
-	TextLine3 *turi.TextLine
 	debug     string
 	font      font.Face
 	sResult   ngword.SmithWatermanEnd
@@ -55,24 +54,21 @@ func NewUI() *UI {
 	}
 	ui.TextLine1 = &turi.TextLine{
 		Rect: image.Rect(16, 16, 400, 48),
-		Text: "Hello@@@world",
 	}
+	ui.TextLine1.SetText("hello@@@world")
+	ui.TextLine1.TypeWriter.IgnoreEnter = true
 	ui.TextLine2 = &turi.TextLine{
-		Rect: image.Rect(16, 64, 400, 96),
-		Text: "@@@",
-	}
-	ui.TextLine3 = &turi.TextLine{
 		Rect:     image.Rect(16, 112, 400, 144),
-		Text:     "Replaced",
 		ReadOnly: true,
 	}
+	ui.TextLine2.SetText("Replaced")
 	ui.TextLine1.SetOnEnterPressed(func(t *turi.TextLine) {
 		ui.button1.Press()
 	})
 	ui.button1.SetOnPressed(func(b *turi.Button) {
 		ui.debug = ""
 
-		replaced, _ := ui.filter.Replace(ui.TextLine1.Text)
+		replaced, _ := ui.filter.Replace(ui.TextLine1.Text(false))
 		//vs := make([]float64, len(ui.filter.End))
 		//ticks := make([]string, len(ui.filter.End))
 		vs := make([]float64, 10)
@@ -81,13 +77,14 @@ func NewUI() *UI {
 			vs[i] = float64(e.MaxAgreement) / float64(e.CompleteAgreement)
 			ticks[i] = e.MatchWord
 		}
+		log.Print(ticks)
 		var err error
 		ui.barGraph, err = NewBarGraph(vs, ticks)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		ui.TextLine3.Text = norm.NFC.String(string(replaced))
+		ui.TextLine2.SetText(norm.NFC.String(string(replaced)))
 	})
 
 	ui.barGraph, err = NewBarGraph([]float64{0.0}, []string{"One"})
@@ -95,7 +92,8 @@ func NewUI() *UI {
 		log.Fatal(err)
 	}
 
-	df := ngword.ReadDataframeFromCSV("resource/ngwords.new.plain.csv")
+	//df := ngword.ReadDataframeFromCSV("resource/ngwords.new.plain.csv")
+	df := ngword.ReadDataframeFromCSV("resource/ngwords.origin.csv")
 	ui.filter = ngword.NewLocalAlignmentDebug(df)
 
 	return ui
@@ -152,7 +150,6 @@ func (ui *UI) Update(s *turi.GameState) error {
 	ui.button1.Update(s.Input)
 	ui.TextLine1.Update(s.Input)
 	ui.TextLine2.Update(s.Input)
-	ui.TextLine3.Update(s.Input)
 	return nil
 }
 
@@ -160,7 +157,6 @@ func (ui *UI) Draw(screen *ebiten.Image) {
 	ui.button1.Draw(screen)
 	ui.TextLine1.Draw(screen)
 	ui.TextLine2.Draw(screen)
-	ui.TextLine3.Draw(screen)
 
 	text.Draw(screen, ui.debug, ui.font, 16, 160, color.Black)
 	op := &ebiten.DrawImageOptions{}

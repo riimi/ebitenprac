@@ -5,7 +5,7 @@ import "golang.org/x/text/unicode/norm"
 const (
 	SCORE_MATCH    = 5
 	SCORE_SIMILAR  = 4
-	SCORE_SPACE    = 0
+	SCORE_SPACE    = -1
 	SCORE_MISMATCH = -2
 
 	NEXT_END = 0
@@ -49,17 +49,17 @@ type Node struct {
 }
 
 var MatchTable = map[rune]int{
-	0x1100: 1,   // ㄱ
-	0x1101: 1,   // ㄲ
-	0x110f: 1,   // ㅋ
-	0x1109: 4,   // ㅅ 초성
-	0x110a: 4,   // ㅆ 초성
-	0x1107: 5,   // ㅂ 초성
-	0x1108: 5,   // ㅃ 초성
-	0x1111: 5,   // ㅍ 초성
-	0x1103: 6,   // ㄷ 초성
-	0x1104: 6,   // ㄸ 초성
-	0x1110: 6,   // ㅌ 초성
+	0x1100: 1, // ㄱ
+	0x1101: 1, // ㄲ
+	0x110f: 1, // ㅋ
+	0x1109: 4, // ㅅ 초성
+	0x110a: 4, // ㅆ 초성
+	0x1107: 5, // ㅂ 초성
+	0x1108: 5, // ㅃ 초성
+	0x1111: 5, // ㅍ 초성
+	//0x1103: 6,   // ㄷ 초성
+	//0x1104: 6,   // ㄸ 초성
+	//0x1110: 6,   // ㅌ 초성
 	0x110c: 7,   // ㅈ 초성
 	0x110d: 7,   // ㅉ 초성
 	0x110e: 7,   // ㅊ 초성
@@ -232,7 +232,8 @@ func SmithWaterman(sentence, word []rune, thresh float32) (<-chan SmithWatermanR
 		//}
 		//_p.Put(stMatrix)
 		endCh <- SmithWatermanEnd{
-			MatchWord:         norm.NFC.String(string(word)),
+			MatchWord: norm.NFC.String(string(word)),
+			//MatchWord:         string(word),
 			LastNodes:         stMatrix[lenWord],
 			CompleteAgreement: completeAgreement,
 			MaxAgreement:      maxAgreement,
@@ -242,4 +243,62 @@ func SmithWaterman(sentence, word []rune, thresh float32) (<-chan SmithWatermanR
 		close(endCh)
 	}()
 	return smithCh, endCh
+}
+
+func SmithWatermanTrie(sentence []rune, words Trie, thresh float32) <-chan SmithWatermanResult {
+	smithCh := make(chan SmithWatermanResult, 10)
+
+	go func() {
+		lenStc := len(sentence)
+		stMatrix := make([][]Node, 100)
+		for i := range stMatrix {
+			stMatrix[i] = make([]Node, lenStc+1)
+		}
+		word := make([]rune, 100)
+		ch := words.PreOrder()
+		for node := range ch {
+			word[node.Level-1] = node.Value
+			for s := 1; s <= lenStc; s++ {
+				ijscore := stMatrix[node.Level-1][s-1].Score + Match(sentence[s-1], node.Value)
+				iscore := stMatrix[node.Level-1][s].Score + Match(rune(0), node.Value)
+				jscore := stMatrix[node.Level][s-1].Score + Match(sentence[s-1], rune(0))
+
+				if ijscore >= iscore && ijscore >= jscore {
+					stMatrix[node.Level][s].Score = ijscore
+					stMatrix[node.Level][s].Next = NEXT_IJ
+				} else if iscore >= jscore {
+					stMatrix[node.Level][s].Score = iscore
+					stMatrix[node.Level][s].Next = NEXT_I
+				} else {
+					stMatrix[node.Level][s].Score = jscore
+					stMatrix[node.Level][s].Next = NEXT_J
+				}
+			}
+
+			if node.End {
+				matchWord := norm.NFKC.String(string(word[:node.Level]))
+				lenWord := node.Level
+				completeAgreement := lenWord * SCORE_MATCH
+				//threshAgreement := float32(completeAgreement) * thresh
+				threshAgreement := float32(completeAgreement) * (-0.001*float32(lenWord+1)*float32(lenWord+1) + 0.99)
+				for i := len(stMatrix[lenWord]) - 1; i >= 0; i-- {
+					v := stMatrix[lenWord][i]
+					if float32(v.Score) >= threshAgreement {
+						s := History(stMatrix, lenWord, i)
+						smithCh <- SmithWatermanResult{
+							MatchWord:         matchWord,
+							CompleteAgreement: completeAgreement,
+							AppliedAgreement:  v.Score,
+							SimilarScore:      float32(v.Score) / float32(completeAgreement),
+							StartPos:          s,
+							EndPos:            i - 1,
+						}
+						i = s
+					}
+				}
+			}
+		}
+		close(smithCh)
+	}()
+	return smithCh
 }
